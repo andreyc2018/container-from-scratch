@@ -4,16 +4,13 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
+	"syscall"
 )
 
 // docker         run image <cmd> <args>
 // go run main.go run       <cmd> <args>
 
 func main() {
-	// println(os.Args)
-	// println(os.Args[0])
-	// println(len(os.Args))
-
 	if len(os.Args) < 3 {
 		fmt.Printf("\"run <cmd> [args]\" is required.\n")
 		os.Exit(0)
@@ -36,7 +33,12 @@ func run() {
 	cmd.Stdout = os.Stdout
 	cmd.Stderr = os.Stderr
 
-	cmd.Run()
+	cmd.SysProcAttr = &syscall.SysProcAttr{
+		Cloneflags: syscall.CLONE_NEWUTS,
+	}
+
+	must(cmd.Run())
+
 }
 
 func must(err error) {
