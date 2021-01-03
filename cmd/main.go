@@ -57,6 +57,7 @@ func child() {
 	syscall.Sethostname([]byte("container"))
 	syscall.Chroot("/var/lib/lxc/buildos7/rootfs")
 	syscall.Chdir("/")
+	syscall.Mount("proc", "proc", "proc", 0, "")
 
 	cmd := exec.Command(os.Args[2], os.Args[3:]...)
 	cmd.Stdin = os.Stdin
@@ -64,6 +65,9 @@ func child() {
 	cmd.Stderr = os.Stderr
 
 	must(cmd.Run())
+
+	syscall.Unmount("/proc", 0)
+
 }
 
 func must(err error) {
