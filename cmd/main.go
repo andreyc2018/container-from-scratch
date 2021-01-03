@@ -2,9 +2,12 @@ package main
 
 import (
 	"fmt"
+	"io/ioutil"
 	"os"
 	"os/exec"
 	"os/user"
+	"path/filepath"
+	"strconv"
 	"syscall"
 )
 
@@ -55,6 +58,8 @@ func run() {
 func child() {
 	fmt.Printf("Running %v as %d\n", os.Args[2:], os.Getpid())
 
+	cg()
+
 	syscall.Sethostname([]byte("container"))
 	syscall.Chroot("/var/lib/lxc/buildos7/rootfs")
 	syscall.Chdir("/")
@@ -65,10 +70,23 @@ func child() {
 	cmd.Stdout = os.Stdout
 	cmd.Stderr = os.Stderr
 
-	must(cmd.Run())
+	cmd.Run()
 
 	syscall.Unmount("/proc", 0)
 
+}
+
+func cg() {
+	cgroups := "/sys/fs/cgroup"
+	scope := filepath.Join(cgroups, "system.slice/andrey-container.scope")
+	err := os.Mkdir(scope, 0755)
+	if err != nil && !os.IsExist(err) {
+		panic(err)
+	}
+	must(ioutil.WriteFile(filepath.Join(scope, "pids.max"), []byte("20"), 0700))
+	// Removes the new cgroup in place after the container exists
+	// must(ioutil.WriteFile(filepath.Join(scope, "cgroup.events"), []byte("populated 1"), 0700))
+	must(ioutil.WriteFile(filepath.Join(scope, "cgroup.procs"), []byte(strconv.Itoa(os.Getpid())), 0700))
 }
 
 func must(err error) {
