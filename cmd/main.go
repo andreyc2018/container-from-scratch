@@ -5,7 +5,6 @@ import (
 	"io/ioutil"
 	"os"
 	"os/exec"
-	"os/user"
 	"path/filepath"
 	"strconv"
 	"syscall"
@@ -17,13 +16,6 @@ import (
 func main() {
 	if len(os.Args) < 3 {
 		fmt.Printf("\"run <cmd> [args]\" is required.\n")
-		os.Exit(0)
-	}
-
-	user, err := user.Current()
-	must(err)
-	if user.Uid != "0" {
-		fmt.Printf("Must be root to run this.\n")
 		os.Exit(0)
 	}
 
@@ -40,32 +32,38 @@ func main() {
 }
 
 func run() {
-	fmt.Printf("Running %v as %d\n", os.Args[2:], os.Getpid())
+	fmt.Printf("Running %v as %d, uid: %d\n", os.Args[2:], os.Getpid(), os.Getuid())
 
-	cmd := exec.Command("/proc/self/exe", append([]string{"child"}, os.Args[2:]...)...)
+	cmd := exec.Command("/proc/self/exe", append([]string{"child", strconv.Itoa(os.Getuid())}, os.Args[2:]...)...)
 	cmd.Stdin = os.Stdin
 	cmd.Stdout = os.Stdout
 	cmd.Stderr = os.Stderr
 
 	cmd.SysProcAttr = &syscall.SysProcAttr{
-		Cloneflags:   syscall.CLONE_NEWUTS | syscall.CLONE_NEWPID | syscall.CLONE_NEWNS,
-		Unshareflags: syscall.CLONE_NEWNS,
+		Cloneflags: syscall.CLONE_NEWUTS | syscall.CLONE_NEWPID | syscall.CLONE_NEWNS | syscall.CLONE_NEWUSER,
+		Credential: &syscall.Credential{Uid: 0, Gid: 0},
+		UidMappings: []syscall.SysProcIDMap{
+			{ContainerID: 0, HostID: os.Getuid(), Size: 1},
+		},
+		GidMappings: []syscall.SysProcIDMap{
+			{ContainerID: 0, HostID: os.Getgid(), Size: 1},
+		},
 	}
 
 	must(cmd.Run())
 }
 
 func child() {
-	fmt.Printf("Running %v as %d\n", os.Args[2:], os.Getpid())
+	fmt.Printf("Running %v as %d, uid: %s --> %d\n", os.Args[3:], os.Getpid(), os.Args[2], os.Getuid())
 
-	cg()
+	cgUser(os.Args[2])
 
 	syscall.Sethostname([]byte("container"))
 	syscall.Chroot("/var/lib/lxc/buildos7/rootfs")
 	syscall.Chdir("/")
 	syscall.Mount("proc", "proc", "proc", 0, "")
 
-	cmd := exec.Command(os.Args[2], os.Args[3:]...)
+	cmd := exec.Command(os.Args[3], os.Args[4:]...)
 	cmd.Stdin = os.Stdin
 	cmd.Stdout = os.Stdout
 	cmd.Stderr = os.Stderr
@@ -76,7 +74,7 @@ func child() {
 
 }
 
-func cg() {
+func cgRoot() {
 	cgroups := "/sys/fs/cgroup"
 	scope := filepath.Join(cgroups, "system.slice/andrey-container.scope")
 	err := os.Mkdir(scope, 0755)
@@ -84,8 +82,18 @@ func cg() {
 		panic(err)
 	}
 	must(ioutil.WriteFile(filepath.Join(scope, "pids.max"), []byte("20"), 0700))
-	// Removes the new cgroup in place after the container exists
-	// must(ioutil.WriteFile(filepath.Join(scope, "cgroup.events"), []byte("populated 1"), 0700))
+	must(ioutil.WriteFile(filepath.Join(scope, "cgroup.procs"), []byte(strconv.Itoa(os.Getpid())), 0700))
+}
+
+func cgUser(uid string) {
+	cgroups := "/sys/fs/cgroup"
+	path := fmt.Sprintf("user.slice/user-%s.slice/user@%s.service/container.scope", uid, uid)
+	scope := filepath.Join(cgroups, path)
+	err := os.Mkdir(scope, 0755)
+	if err != nil && !os.IsExist(err) {
+		panic(err)
+	}
+	must(ioutil.WriteFile(filepath.Join(scope, "pids.max"), []byte("20"), 0700))
 	must(ioutil.WriteFile(filepath.Join(scope, "cgroup.procs"), []byte(strconv.Itoa(os.Getpid())), 0700))
 }
 
